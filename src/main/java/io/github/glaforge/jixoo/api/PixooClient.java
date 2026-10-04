@@ -275,6 +275,34 @@ public interface PixooClient extends AutoCloseable {
     }
 
     /**
+     * Resizes, post-processes with an LED optimization filter, and sends a static PixooImage to the display.
+     *
+     * @param image         the image to process and send
+     * @param scaleMode     the scale mode (FIT_CENTER, FILL_CROP, STRETCH)
+     * @param postProcessor the LED filter to apply (e.g. true-black clamping), or null for none
+     * @return the device's response
+     */
+    default PixooResponse sendImage(PixooImage image, ImageProcessor.ScaleMode scaleMode, io.github.glaforge.jixoo.image.LedPostProcessor postProcessor) {
+        PixooImage processed = ImageProcessor.resizeAndFit(image, scaleMode);
+        if (postProcessor != null) {
+            processed = postProcessor.process(processed);
+        }
+        return sendAnimation(PixooAnimation.singleImage(processed));
+    }
+
+    /**
+     * Loads, resizes, post-processes with an LED optimization filter, and sends an image file to the display.
+     *
+     * @param path          the path to the image file
+     * @param scaleMode     the scale mode (FIT_CENTER, FILL_CROP, STRETCH)
+     * @param postProcessor the LED filter to apply (e.g. true-black clamping), or null for none
+     * @return the device's response
+     */
+    default PixooResponse sendImage(Path path, ImageProcessor.ScaleMode scaleMode, io.github.glaforge.jixoo.image.LedPostProcessor postProcessor) {
+        return sendImage(ImageProcessor.loadImage(path), scaleMode, postProcessor);
+    }
+
+    /**
      * Decodes and displays an animated or static GIF from an InputStream using FIT_CENTER.
      *
      * @param gifStream the input stream containing the GIF data
@@ -314,6 +342,22 @@ public interface PixooClient extends AutoCloseable {
      */
     default PixooResponse sendGif(Path gifPath, ImageProcessor.ScaleMode scaleMode) {
         return sendAnimation(GifDecoder.decode(gifPath, scaleMode));
+    }
+
+    /**
+     * Decodes, post-processes with an LED optimization filter, and displays a GIF from a Path.
+     *
+     * @param gifPath       the path to the GIF file
+     * @param scaleMode     the scale mode (FIT_CENTER, FILL_CROP, STRETCH)
+     * @param postProcessor the LED filter to apply, or null for none
+     * @return the device's response to the final frame sent
+     */
+    default PixooResponse sendGif(Path gifPath, ImageProcessor.ScaleMode scaleMode, io.github.glaforge.jixoo.image.LedPostProcessor postProcessor) {
+        PixooAnimation anim = GifDecoder.decode(gifPath, scaleMode);
+        if (postProcessor != null) {
+            anim = postProcessor.process(anim);
+        }
+        return sendAnimation(anim);
     }
 
     /**

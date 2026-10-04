@@ -60,6 +60,19 @@ public class ImageCommand implements Callable<Integer> {
     )
     private io.github.glaforge.jixoo.image.ImageProcessor.ScaleMode scaleMode;
 
+    @Option(
+            names = {"-o", "--led-optimize"},
+            description = "Apply physical LED matrix optimization (true-black clamping and glare reduction)"
+    )
+    private boolean ledOptimize;
+
+    @Option(
+            names = {"--black-threshold"},
+            defaultValue = "15",
+            description = "Threshold (0-255) below which dark pixels are clamped to true #000000 (default: 15)"
+    )
+    private int blackThreshold = 15;
+
     @Parameters(
             index = "0",
             description = "Path to the image file (e.g., image.png, photo.jpg)"
@@ -79,9 +92,18 @@ public class ImageCommand implements Callable<Integer> {
                 : (crop ? io.github.glaforge.jixoo.image.ImageProcessor.ScaleMode.FILL_CROP
                         : io.github.glaforge.jixoo.image.ImageProcessor.ScaleMode.FIT_CENTER);
 
+        io.github.glaforge.jixoo.image.LedPostProcessor postProcessor = ledOptimize
+                ? io.github.glaforge.jixoo.image.LedPostProcessor.builder().blackThreshold(blackThreshold).build()
+                : null;
+
         PixooClient client = parent.createClient();
-        spec.commandLine().getOut().printf("Processing and sending image: %s (%s)...%n", path.getFileName(), mode);
-        PixooResponse response = client.sendImage(path, mode);
+        if (ledOptimize) {
+            spec.commandLine().getOut().printf("Processing and sending image with LED optimization: %s (%s, blackThreshold=%d)...%n",
+                    path.getFileName(), mode, blackThreshold);
+        } else {
+            spec.commandLine().getOut().printf("Processing and sending image: %s (%s)...%n", path.getFileName(), mode);
+        }
+        PixooResponse response = client.sendImage(path, mode, postProcessor);
         if (response.isSuccess()) {
             spec.commandLine().getOut().printf("Successfully displayed image: %s.%n", path.getFileName());
             return 0;

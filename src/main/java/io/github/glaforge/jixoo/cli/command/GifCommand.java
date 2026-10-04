@@ -72,6 +72,19 @@ public class GifCommand implements Callable<Integer> {
     private io.github.glaforge.jixoo.image.ImageProcessor.ScaleMode scaleMode;
 
     @Option(
+            names = {"-o", "--led-optimize"},
+            description = "Apply physical LED matrix optimization (true-black clamping and glare reduction)"
+    )
+    private boolean ledOptimize;
+
+    @Option(
+            names = {"--black-threshold"},
+            defaultValue = "15",
+            description = "Threshold (0-255) below which dark pixels are clamped to true #000000 (default: 15)"
+    )
+    private int blackThreshold = 15;
+
+    @Option(
             names = {"--direct"},
             description = "Direct device firmware to fetch URL directly via Device/PlayTFGif (WARNING: can crash device on high-res GIFs or complex HTTPS)"
     )
@@ -94,6 +107,10 @@ public class GifCommand implements Callable<Integer> {
                 : (crop ? io.github.glaforge.jixoo.image.ImageProcessor.ScaleMode.FILL_CROP
                         : io.github.glaforge.jixoo.image.ImageProcessor.ScaleMode.FIT_CENTER);
 
+        io.github.glaforge.jixoo.image.LedPostProcessor postProcessor = ledOptimize
+                ? io.github.glaforge.jixoo.image.LedPostProcessor.builder().blackThreshold(blackThreshold).build()
+                : null;
+
         PixooClient client = parent.createClient();
         PixooResponse response;
 
@@ -103,8 +120,13 @@ public class GifCommand implements Callable<Integer> {
                 spec.commandLine().getErr().printf("GIF file does not exist or is not a regular file: %s%n", gifFilePath);
                 return 1;
             }
-            spec.commandLine().getOut().printf("Decoding and uploading GIF file: %s (%s)...%n", path.getFileName(), mode);
-            response = client.sendGif(path, mode);
+            if (ledOptimize) {
+                spec.commandLine().getOut().printf("Decoding and uploading GIF with LED optimization: %s (%s, blackThreshold=%d)...%n",
+                        path.getFileName(), mode, blackThreshold);
+            } else {
+                spec.commandLine().getOut().printf("Decoding and uploading GIF file: %s (%s)...%n", path.getFileName(), mode);
+            }
+            response = client.sendGif(path, mode, postProcessor);
         } else {
             if (direct) {
                 spec.commandLine().getOut().printf("Directing Pixoo 64 firmware to download and render remote GIF from URL: %s...%n", gifUrl);

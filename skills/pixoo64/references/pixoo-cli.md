@@ -294,11 +294,16 @@ pixoo-cli image --crop path/to/photo.jpg
 
 # Explicit scale mode (FIT_CENTER, FILL_CROP, STRETCH)
 pixoo-cli image -s FILL_CROP path/to/photo.jpg
+
+# Display image with hardware LED optimization (true-black clamping & glare soft-limiting)
+pixoo-cli image --led-optimize path/to/artwork.png
 ```
 
 Options:
 - `-c`, `--crop`: Crop rectangular images to fill 64x64 without letterbox bars (`FILL_CROP`).
 - `-s`, `--scale-mode=<mode>`: Scaling mode (`FIT_CENTER`, `FILL_CROP`, `STRETCH`).
+- `-o`, `--led-optimize`: Apply physical LED matrix optimization (true-black clamping to `#000000` and glare reduction).
+- `--black-threshold=<val>`: Threshold (0-255) below which dark pixels clamp to `#000000` (default: 15).
 
 ---
 
@@ -310,6 +315,9 @@ pixoo-cli gif --file path/to/animation.gif
 
 # Local GIF cropped to square
 pixoo-cli gif --crop --file path/to/animation.gif
+
+# Local GIF with hardware LED optimization
+pixoo-cli gif --led-optimize --file path/to/animation.gif
 
 # Remote HTTP/HTTPS GIF URL (auto-downloaded, scaled client-side, and streamed safely)
 pixoo-cli gif --url "https://example.com/animation.gif"
@@ -324,6 +332,8 @@ pixoo-cli gif --direct --url "http://example.com/small.gif"
 Options:
 - `-c`, `--crop`: Crop rectangular GIFs to fill 64x64 without letterbox bars (`FILL_CROP`).
 - `-s`, `--scale-mode=<mode>`: Scaling mode (`FIT_CENTER`, `FILL_CROP`, `STRETCH`).
+- `-o`, `--led-optimize`: Apply physical LED matrix optimization (true-black clamping to `#000000` and glare reduction).
+- `--black-threshold=<val>`: Threshold (0-255) below which dark pixels clamp to `#000000` (default: 15).
 - `--direct`: Direct device firmware to fetch URL directly via `Device/PlayTFGif` (bypasses client-side processing).
 
 

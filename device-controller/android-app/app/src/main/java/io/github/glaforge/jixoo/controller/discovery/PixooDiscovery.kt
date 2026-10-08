@@ -210,21 +210,18 @@ object PixooDiscovery {
         candidates: Map<String, String>,
         port: Int
     ): List<DiscoveredPixooDevice> = coroutineScope {
-        val semaphore = Semaphore(32)
-        val portsToTry = listOf(port, 80, 8080).distinct()
+        val semaphore = Semaphore(64)
 
         candidates.entries.map { (ip, mac) ->
             async {
                 semaphore.withPermit {
-                    for (p in portsToTry) {
-                        if (PixooHttpClient.checkDevice(ip, p, timeoutMs = 650)) {
-                            return@withPermit DiscoveredPixooDevice(
-                                ipAddress = ip,
-                                macAddress = mac,
-                                deviceName = "Pixoo 64",
-                                deviceId = 0
-                            )
-                        }
+                    if (PixooHttpClient.checkDevice(ip, port, timeoutMs = 450)) {
+                        return@withPermit DiscoveredPixooDevice(
+                            ipAddress = ip,
+                            macAddress = mac,
+                            deviceName = "Pixoo 64",
+                            deviceId = 0
+                        )
                     }
                     null
                 }

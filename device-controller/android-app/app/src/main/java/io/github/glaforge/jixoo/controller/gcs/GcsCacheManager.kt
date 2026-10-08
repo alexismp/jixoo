@@ -63,8 +63,12 @@ object GcsCacheManager {
 
     fun parseGcsUrl(gcsUrl: String): GcsLocation? {
         val trimmed = gcsUrl.trim()
-        if (!trimmed.startsWith("gs://", ignoreCase = true)) return null
-        val withoutScheme = trimmed.substring(5).trimEnd('/')
+        if (trimmed.isEmpty()) return null
+        val withoutScheme = if (trimmed.startsWith("gs://", ignoreCase = true)) {
+            trimmed.substring(5).trimEnd('/')
+        } else {
+            trimmed.trim('/')
+        }
         if (withoutScheme.isEmpty()) return null
         val slashIdx = withoutScheme.indexOf('/')
         return if (slashIdx < 0) {

@@ -31,7 +31,10 @@ data class SlideshowConfig(
         get() = if (secondaryIpEnabled && secondaryIp.isNotBlank()) secondaryIp.trim() else null
 
     companion object {
-        const val DEFAULT_GCS_BUCKET = "gs://conference-pics/gravidots/visuals"
+        const val BUCKET_BEST = "gs://conference-pics/gravidots/visuals-best"
+        const val BUCKET_ALL = "gs://conference-pics/gravidots/visuals"
+        const val BUCKET_BACKUP = "gs://conference-pics/gravidots/visuals-backup"
+        const val DEFAULT_GCS_BUCKET = BUCKET_ALL
         const val DEFAULT_FALLBACK_IP = "192.168.1.49"
         const val DEFAULT_PORT = 80
 

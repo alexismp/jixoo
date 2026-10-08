@@ -131,26 +131,38 @@ class SlideshowViewModel(application: Application) : AndroidViewModel(applicatio
     fun discoverDevices() {
         if (_uiState.value.isDiscovering) return
         viewModelScope.launch {
-            _uiState.update { it.copy(isDiscovering = true) }
+            _uiState.update {
+                it.copy(
+                    isDiscovering = true,
+                    primaryReachable = null,
+                    secondaryReachable = null
+                )
+            }
             val port = _uiState.value.config.port
-            appendLog("Searching local network for Pixoo 64 via UDP/ARP/HTTP probe...")
+            appendLog("Scanning local Wi-Fi subnet for Pixoo 64 devices (ignoring previous saved IPs)...")
             val found = PixooDiscovery.discoverDevices(port = port, timeoutMs = 3000)
             if (found.isNotEmpty()) {
-                appendLog("Found ${found.size} Pixoo device(s): ${found.joinToString { "${it.ipAddress} (${it.deviceName})" }}")
+                val newPrimary = found[0].ipAddress
+                val newSecondary = found.getOrNull(1)?.ipAddress
+                appendLog(
+                    "Discovered & applied ${found.size} Pixoo device(s): Primary = $newPrimary" +
+                        (if (newSecondary != null) ", Secondary = $newSecondary" else "")
+                )
                 _uiState.update { state ->
-                    val updatedConfig = if (state.config.primaryIp.isBlank()) {
-                        state.config.copy(primaryIp = found.first().ipAddress).also { prefs.save(it) }
-                    } else {
-                        state.config
-                    }
+                    val updatedConfig = state.config.copy(
+                        primaryIp = newPrimary,
+                        secondaryIp = newSecondary ?: state.config.secondaryIp
+                    ).also { prefs.save(it) }
                     state.copy(
                         isDiscovering = false,
                         discoveredDevices = found,
-                        config = updatedConfig
+                        config = updatedConfig,
+                        primaryReachable = true,
+                        secondaryReachable = if (updatedConfig.secondaryIpEnabled && newSecondary != null) true else state.secondaryReachable
                     )
                 }
             } else {
-                appendLog("No Pixoo devices discovered on local subnet.")
+                appendLog("No Pixoo devices discovered on current Wi-Fi subnet.")
                 _uiState.update { it.copy(isDiscovering = false, discoveredDevices = emptyList()) }
             }
         }
@@ -222,6 +234,25 @@ class SlideshowViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
+    fun saveBucketAndRefreshCache(newBucketUrl: String, activity: Activity?) {
+        val trimmed = newBucketUrl.trim()
+        val normalized = if (trimmed.isNotEmpty() && !trimmed.startsWith("gs://", ignoreCase = true)) {
+            "gs://$trimmed"
+        } else {
+            trimmed.ifEmpty { SlideshowConfig.DEFAULT_GCS_BUCKET }
+        }
+        updateConfig {
+            it.copy(
+                sourceType = ImageSourceType.GCS_BUCKET,
+                gcsBucketUrl = normalized
+            )
+        }
+        appendLog("Saved bucket source: $normalized. Clearing previous cache and syncing...")
+        GcsCacheManager.clearCacheOnStartup(getApplication())
+        _uiState.update { it.copy(cachedFileCount = 0) }
+        refreshCacheManual(activity)
+    }
+
     fun refreshCacheManual(activity: Activity?) {
         if (_uiState.value.isRefreshingCache) return
         viewModelScope.launch {
@@ -277,6 +308,7 @@ class SlideshowViewModel(application: Application) : AndroidViewModel(applicatio
         slideshowJob?.cancel()
         slideshowJob = null
         skipSignal.complete(Unit)
+        io.github.glaforge.jixoo.controller.service.SlideshowForegroundService.stop(getApplication())
         appendLog("Slideshow stopped.")
         _uiState.update {
             it.copy(
@@ -288,6 +320,7 @@ class SlideshowViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun startSlideshow(activity: Activity?) {
         if (_uiState.value.isRunning) return
+        io.github.glaforge.jixoo.controller.service.SlideshowForegroundService.start(getApplication())
         slideshowJob = viewModelScope.launch(Dispatchers.Default) {
             _uiState.update {
                 it.copy(
@@ -303,6 +336,7 @@ class SlideshowViewModel(application: Application) : AndroidViewModel(applicatio
             } catch (e: Exception) {
                 appendLog("Error: ${e.message ?: "Unexpected failure"}")
             } finally {
+                io.github.glaforge.jixoo.controller.service.SlideshowForegroundService.stop(getApplication())
                 _uiState.update {
                     it.copy(
                         isRunning = false,
@@ -435,7 +469,7 @@ class SlideshowViewModel(application: Application) : AndroidViewModel(applicatio
             }
         }
 
-        // 7. Ensure display is ON and set to Custom Channel 3
+        // 7. Ensure display is ON, set to Custom Channel 3, and initialize PicID counter once at startup
         appendLog("Initializing Pixoo display channel(s)...")
         coroutineScope {
             launch { PixooHttpClient.initDisplay(primaryIp, port) }
@@ -443,8 +477,14 @@ class SlideshowViewModel(application: Application) : AndroidViewModel(applicatio
                 launch { PixooHttpClient.initDisplay(secondaryIp, port) }
             }
         }
+        PixooHttpClient.dispatchLockstep(primaryIp, secondaryIp, port) { ip, p ->
+            PixooHttpClient.resetHttpGifId(ip, p)
+        }
+        picIdCounter = 0
+        delay(50L)
 
         var lastSelectedId = ""
+        var lastUploadSucceeded = true
 
         // 8. Main Slideshow Loop
         while (kotlin.coroutines.coroutineContext.isActive) {
@@ -481,7 +521,7 @@ class SlideshowViewModel(application: Application) : AndroidViewModel(applicatio
                 }
             }
 
-            // Gather valid image files (line 388)
+            // Gather valid image files
             val candidates = loadSlideCandidates(appContext, cfg)
             val totalFiles = candidates.size
             _uiState.update { it.copy(totalSlidesCount = totalFiles) }
@@ -493,7 +533,7 @@ class SlideshowViewModel(application: Application) : AndroidViewModel(applicatio
                 continue
             }
 
-            // Select one file at random (avoid immediate repeat if > 1 image, lines 398-406)
+            // Select one file at random (avoid immediate repeat if > 1 image)
             var randIdx = Random.nextInt(totalFiles)
             var selected = candidates[randIdx]
             if (totalFiles > 1) {
@@ -533,14 +573,28 @@ class SlideshowViewModel(application: Application) : AndroidViewModel(applicatio
 
             skipSignal = CompletableDeferred()
 
-            // Ensure LED screen finished processing any earlier commands before sending a new image/animation
-            while (kotlin.coroutines.coroutineContext.isActive && !skipSignal.isCompleted) {
-                val ready = PixooHttpClient.dispatchLockstep(primaryIp, currentSecondaryIp, currentPort) { ip, p ->
-                    PixooHttpClient.checkDevice(ip, p, timeoutMs = 2500)
+            // Only poll checkDevice if a previous upload timed out or failed
+            if (!lastUploadSucceeded) {
+                while (kotlin.coroutines.coroutineContext.isActive && !skipSignal.isCompleted) {
+                    val ready = PixooHttpClient.dispatchLockstep(primaryIp, currentSecondaryIp, currentPort) { ip, p ->
+                        PixooHttpClient.checkDevice(ip, p, timeoutMs = 2500)
+                    }
+                    if (ready) {
+                        lastUploadSucceeded = true
+                        break
+                    }
+                    appendLog("Waiting for Pixoo LED screen to finish processing previous command...")
+                    delay(500L)
                 }
-                if (ready) break
-                appendLog("Waiting for Pixoo LED screen to finish processing previous command...")
-                delay(500L)
+            }
+
+            // Only wrap/reset firmware PicID high-water mark before uint16 overflow (never between normal slides!)
+            if (picIdCounter >= 60000) {
+                PixooHttpClient.dispatchLockstep(primaryIp, currentSecondaryIp, currentPort) { ip, p ->
+                    PixooHttpClient.resetHttpGifId(ip, p)
+                }
+                picIdCounter = 0
+                delay(50L)
             }
 
             when (processed) {
@@ -557,8 +611,6 @@ class SlideshowViewModel(application: Application) : AndroidViewModel(applicatio
                         rawFrames to 1
                     }
 
-                    // Pixoo hardware loops buffered multi-frame animations autonomously!
-                    // Upload ONLY 1 single cycle (baseFrames) rather than duplicating cycles over Wi-Fi.
                     val singleCycleDur = baseFrames.sumOf { it.delaySeconds * frameSpeedMultiplier }
                     val targetCycles = if (singleCycleDur > 0.0) {
                         max(1, ceil(slideIntervalSec.toDouble() / singleCycleDur).toInt())
@@ -566,7 +618,7 @@ class SlideshowViewModel(application: Application) : AndroidViewModel(applicatio
                     val totalPlayDur = singleCycleDur * targetCycles
 
                     val totalFrames = baseFrames.size
-                    picIdCounter = (picIdCounter % 65535) + 1
+                    picIdCounter += 1
                     val animationPicId = picIdCounter
 
                     val targetDesc = if (!currentSecondaryIp.isNullOrBlank()) {
@@ -578,10 +630,9 @@ class SlideshowViewModel(application: Application) : AndroidViewModel(applicatio
                     appendLog(
                         String.format(
                             Locale.US,
-                            "Uploading %d frame(s) to %s hardware buffer (autonomous playback for %d cycle(s), ~%.1fs)...",
+                            "Burst-uploading %d frame(s) to %s hardware buffer (autonomous playback ~%.1fs)...",
                             totalFrames,
                             targetDesc,
-                            targetCycles,
                             totalPlayDur
                         )
                     )
@@ -589,17 +640,14 @@ class SlideshowViewModel(application: Application) : AndroidViewModel(applicatio
                     _uiState.update {
                         it.copy(
                             previewPixels64 = null, // Do not render on the phone
-                            currentAnimationStatus = "Uploading $totalFrames frames to hardware (PicID $animationPicId)..."
+                            currentAnimationStatus = "Uploading $totalFrames frames to Pixoo SRAM..."
                         )
                     }
 
-                    // Reset hardware buffer and give ESP32 40ms settlement time before frame 0
-                    PixooHttpClient.dispatchLockstep(primaryIp, currentSecondaryIp, currentPort) { ip, p ->
-                        PixooHttpClient.resetHttpGifId(ip, p)
-                    }
-                    delay(40L)
-
                     var allUploaded = true
+                    var primaryRttSumMs = 0L
+                    val uploadStartMs = System.currentTimeMillis()
+
                     for ((offset, f) in baseFrames.withIndex()) {
                         if (skipSignal.isCompleted || !kotlin.coroutines.coroutineContext.isActive) {
                             allUploaded = false
@@ -616,44 +664,56 @@ class SlideshowViewModel(application: Application) : AndroidViewModel(applicatio
                                 picId = animationPicId,
                                 picSpeedMs = speedMs,
                                 base64Data = f.base64Data,
-                                timeoutMs = 5000
+                                timeoutMs = 2000
                             )
                         }
                         if (!ok) {
-                            appendLog("Warning: Hardware rejected or timed out on frame $offset/$totalFrames. Aborting sequence to avoid stuck 'Loading...'.")
+                            appendLog("Warning: Hardware busy or unreachable on frame $offset/$totalFrames. Aborting sequence.")
                             allUploaded = false
+                            lastUploadSucceeded = false
                             break
                         }
-
-                        // Pacing between frame uploads so ESP32 never drops frames
-                        delay(35L)
+                        primaryRttSumMs += PixooHttpClient.getLastRttMs(primaryIp, currentPort)
                     }
 
+                    val uploadElapsedMs = (System.currentTimeMillis() - uploadStartMs).coerceAtLeast(1L)
+
                     if (allUploaded) {
-                        appendLog("Hardware buffered all $totalFrames frames. Playing autonomously on LED screen for ~${String.format(Locale.US, "%.1f", totalPlayDur)}s...")
+                        lastUploadSucceeded = true
+                        val avgRtt = if (totalFrames > 0) primaryRttSumMs / totalFrames else 0L
+                        val nativeFps = if (singleCycleDur > 0.0) totalFrames / singleCycleDur else 10.0
+                        val secStatus = if (!currentSecondaryIp.isNullOrBlank()) {
+                            if (PixooHttpClient.isDeviceInBackoff(currentSecondaryIp, currentPort)) {
+                                " | Secondary: OFFLINE (isolated)"
+                            } else {
+                                " | Secondary RTT: ${PixooHttpClient.getLastRttMs(currentSecondaryIp, currentPort)}ms"
+                            }
+                        } else ""
+
+                        appendLog(
+                            String.format(
+                                Locale.US,
+                                "Uploaded %d frames in %dms (avg RTT %dms%s). Pixoo hardware playing autonomously at %.1f FPS for ~%.1fs.",
+                                totalFrames,
+                                uploadElapsedMs,
+                                avgRtt,
+                                secStatus,
+                                nativeFps,
+                                totalPlayDur
+                            )
+                        )
                         _uiState.update {
                             it.copy(
                                 previewPixels64 = null,
-                                currentAnimationStatus = "Autonomous hardware playback (~${String.format(Locale.US, "%.1f", totalPlayDur)}s)"
+                                currentAnimationStatus = "Autonomous hardware playback (${String.format(Locale.US, "%.1f", nativeFps)} FPS)"
                             )
                         }
 
-                        // Wait for full autonomous hardware playback duration before sending any new slide
                         val waitTimeMs = max(slideIntervalSec * 1000L, (totalPlayDur * 1000.0).toLong())
                         waitWithSkip(waitTimeMs)
                     } else {
-                        // Reset incomplete buffer immediately so device never stays on "Loading..."
-                        PixooHttpClient.dispatchLockstep(primaryIp, currentSecondaryIp, currentPort) { ip, p ->
-                            PixooHttpClient.resetHttpGifId(ip, p)
-                        }
-                        delay(100L)
-                        appendLog("Animation upload incomplete or skipped; hardware buffer cleared.")
+                        delay(250L)
                     }
-
-                    _uiState.update {
-                        it.copy(currentAnimationStatus = "Animation finished")
-                    }
-                    delay(200L)
                 }
 
                 is ProcessedMedia.StaticImage -> {
@@ -664,20 +724,11 @@ class SlideshowViewModel(application: Application) : AndroidViewModel(applicatio
                         )
                     }
 
-                    // Reset hardware buffer state machine and let ESP32 settle
-                    PixooHttpClient.dispatchLockstep(
-                        primaryIp = primaryIp,
-                        secondaryIp = currentSecondaryIp,
-                        port = currentPort
-                    ) { ip, p ->
-                        PixooHttpClient.resetHttpGifId(ip, p)
-                    }
-                    delay(40L)
-
-                    picIdCounter = (picIdCounter % 65535) + 1
+                    picIdCounter += 1
                     val currentPicId = picIdCounter
 
-                    // Dispatch static frame to device(s) and await hardware confirmation
+                    // Dispatch single frame (picNum = 1) directly over previous image without ResetHttpGifId
+                    // Firmware swaps display double-buffer instantaneously with zero "Loading..." screen
                     val ok = PixooHttpClient.dispatchLockstep(
                         primaryIp = primaryIp,
                         secondaryIp = currentSecondaryIp,
@@ -696,14 +747,16 @@ class SlideshowViewModel(application: Application) : AndroidViewModel(applicatio
                     }
 
                     if (ok) {
+                        lastUploadSucceeded = true
                         if (!currentSecondaryIp.isNullOrBlank()) {
-                            appendLog("Displayed static slide on both Pixoo screens autonomously.")
+                            appendLog("Displayed static slide on both Pixoo screens autonomously (PicID $currentPicId).")
                         } else {
-                            appendLog("Displayed static slide on Pixoo screen autonomously.")
+                            appendLog("Displayed static slide on Pixoo screen autonomously (PicID $currentPicId).")
                         }
                         appendLog("Holding autonomous display for ${slideIntervalSec}s...")
                         waitWithSkip(slideIntervalSec * 1000L)
                     } else {
+                        lastUploadSucceeded = false
                         appendLog("Warning: Static slide upload timed out while device was busy. Waiting before next slide...")
                         delay(500L)
                     }

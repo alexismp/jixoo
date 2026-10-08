@@ -59,7 +59,10 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -125,6 +128,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         handleAdbIntent(intent)
         setContent {
             MaterialTheme(colorScheme = PixooDarkColorScheme) {
@@ -440,6 +444,12 @@ fun PixooControllerScreen(
                 expanded = expandDevices,
                 onToggle = { expandDevices = !expandDevices }
             ) {
+                Text(
+                    text = "Tip: Tap \"Discover & Replace IP\" anytime you change Wi-Fi networks — it ignores any old IP below, scans your current Wi-Fi, and applies the live Pixoo IP automatically.",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -450,8 +460,17 @@ fun PixooControllerScreen(
                         onValueChange = { value ->
                             viewModel.updateConfig { it.copy(primaryIp = value) }
                         },
-                        label = { Text("Primary Pixoo IP (PIXOO_IP)") },
-                        placeholder = { Text("Auto-discover or 192.168.1.49") },
+                        label = { Text("Primary Pixoo IP") },
+                        placeholder = { Text("Leave blank or tap Discover") },
+                        trailingIcon = {
+                            if (uiState.config.primaryIp.isNotEmpty()) {
+                                TextButton(
+                                    onClick = { viewModel.updateConfig { it.copy(primaryIp = "") } }
+                                ) {
+                                    Text("✕", fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        },
                         singleLine = true,
                         modifier = Modifier.weight(1f)
                     )
@@ -462,10 +481,10 @@ fun PixooControllerScreen(
                             val parsed = value.filter { it.isDigit() }.toIntOrNull() ?: 80
                             viewModel.updateConfig { it.copy(port = parsed.coerceIn(1, 65535)) }
                         },
-                        label = { Text("Port (-p)") },
+                        label = { Text("Port") },
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         singleLine = true,
-                        modifier = Modifier.width(96.dp)
+                        modifier = Modifier.width(88.dp)
                     )
                 }
 
@@ -509,12 +528,12 @@ fun PixooControllerScreen(
                         Spacer(modifier = Modifier.width(8.dp))
                         Column {
                             Text(
-                                text = "Second Pixoo Sync (-d / --device2)",
+                                text = "Second Pixoo Sync (--device2)",
                                 fontWeight = FontWeight.SemiBold,
                                 fontSize = 13.sp
                             )
                             Text(
-                                text = "Lockstep identical streaming to a 2nd display",
+                                text = "Stream in sync to a 2nd display (auto-isolated if offline)",
                                 fontSize = 11.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -534,8 +553,17 @@ fun PixooControllerScreen(
                         onValueChange = { value ->
                             viewModel.updateConfig { it.copy(secondaryIp = value.trim()) }
                         },
-                        label = { Text("Second Pixoo IP (PIXOO_IP2 / --device2)") },
+                        label = { Text("Second Pixoo IP") },
                         placeholder = { Text("e.g. 192.168.1.50") },
+                        trailingIcon = {
+                            if (uiState.config.secondaryIp.isNotEmpty()) {
+                                TextButton(
+                                    onClick = { viewModel.updateConfig { it.copy(secondaryIp = "") } }
+                                ) {
+                                    Text("✕", fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -545,27 +573,28 @@ fun PixooControllerScreen(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    OutlinedButton(
+                    Button(
                         onClick = { viewModel.discoverDevices() },
                         enabled = !uiState.isDiscovering,
-                        modifier = Modifier.weight(1f)
+                        modifier = Modifier.weight(1.3f)
                     ) {
                         if (uiState.isDiscovering) {
                             CircularProgressIndicator(
                                 modifier = Modifier.size(16.dp),
-                                strokeWidth = 2.dp
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.onPrimary
                             )
                         } else {
                             Icon(Icons.Default.Search, contentDescription = null)
                         }
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text(if (uiState.isDiscovering) "Scanning..." else "Discover")
+                        Text(if (uiState.isDiscovering) "Scanning Wi-Fi..." else "Discover & Replace IP")
                     }
 
                     OutlinedButton(
                         onClick = { viewModel.checkDevicesConnectivity() },
                         enabled = !uiState.isCheckingDevices,
-                        modifier = Modifier.weight(1f)
+                        modifier = Modifier.weight(0.9f)
                     ) {
                         if (uiState.isCheckingDevices) {
                             CircularProgressIndicator(
@@ -678,16 +707,109 @@ fun PixooControllerScreen(
                 }
 
                 if (uiState.config.sourceType == ImageSourceType.GCS_BUCKET) {
-                    OutlinedTextField(
-                        value = uiState.config.gcsBucketUrl,
-                        onValueChange = { value ->
-                            viewModel.updateConfig { it.copy(gcsBucketUrl = value) }
-                        },
-                        label = { Text("GCS Bucket URL (IMAGE_SOURCE)") },
-                        placeholder = { Text(SlideshowConfig.DEFAULT_GCS_BUCKET) },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
+                    val presetOptions = listOf(
+                        "Best visuals (gs://conference-pics/gravidots/visuals-best)" to SlideshowConfig.BUCKET_BEST,
+                        "All approved visuals (conference-pics/gravidots/visuals)" to SlideshowConfig.BUCKET_ALL,
+                        "Backup visuals (conference-pics/gravidots/visuals-backup)" to SlideshowConfig.BUCKET_BACKUP,
+                        "Custom URL..." to null
                     )
+
+                    val savedUrl = uiState.config.gcsBucketUrl
+                    val initialIsCustom = presetOptions.none { it.second == savedUrl }
+
+                    var dropdownExpanded by remember { mutableStateOf(false) }
+                    var isCustomMode by remember(savedUrl) { mutableStateOf(initialIsCustom) }
+                    var selectedPresetUrl by remember(savedUrl) {
+                        mutableStateOf(if (initialIsCustom) SlideshowConfig.BUCKET_ALL else savedUrl)
+                    }
+                    var customBucketInput by remember(savedUrl) {
+                        mutableStateOf(if (initialIsCustom) savedUrl else SlideshowConfig.BUCKET_ALL)
+                    }
+
+                    val activeDropdownLabel = if (isCustomMode) {
+                        "Custom URL..."
+                    } else {
+                        presetOptions.firstOrNull { it.second == selectedPresetUrl }?.first
+                            ?: presetOptions[1].first
+                    }
+
+                    ExposedDropdownMenuBox(
+                        expanded = dropdownExpanded,
+                        onExpandedChange = { dropdownExpanded = !dropdownExpanded },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        OutlinedTextField(
+                            value = activeDropdownLabel,
+                            onValueChange = {},
+                            readOnly = true,
+                            label = { Text("GCS Visuals Bucket") },
+                            trailingIcon = {
+                                ExposedDropdownMenuDefaults.TrailingIcon(expanded = dropdownExpanded)
+                            },
+                            colors = ExposedDropdownMenuDefaults.outlinedTextFieldColors(),
+                            singleLine = true,
+                            modifier = Modifier
+                                .menuAnchor()
+                                .fillMaxWidth()
+                        )
+                        ExposedDropdownMenu(
+                            expanded = dropdownExpanded,
+                            onDismissRequest = { dropdownExpanded = false }
+                        ) {
+                            presetOptions.forEach { (label, presetUrl) ->
+                                DropdownMenuItem(
+                                    text = { Text(label, fontSize = 13.sp) },
+                                    onClick = {
+                                        dropdownExpanded = false
+                                        if (presetUrl != null) {
+                                            isCustomMode = false
+                                            selectedPresetUrl = presetUrl
+                                        } else {
+                                            isCustomMode = true
+                                            if (customBucketInput.isBlank() || presetOptions.any { it.second == customBucketInput }) {
+                                                customBucketInput = SlideshowConfig.BUCKET_ALL
+                                            }
+                                        }
+                                    }
+                                )
+                            }
+                        }
+                    }
+
+                    if (isCustomMode) {
+                        OutlinedTextField(
+                            value = customBucketInput,
+                            onValueChange = { value ->
+                                customBucketInput = value
+                            },
+                            label = { Text("Custom GCS Bucket URL") },
+                            placeholder = { Text(SlideshowConfig.BUCKET_ALL) },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+
+                    val effectiveBucketToSave = if (isCustomMode) customBucketInput else selectedPresetUrl
+
+                    Button(
+                        onClick = {
+                            viewModel.saveBucketAndRefreshCache(effectiveBucketToSave, activity)
+                        },
+                        enabled = !uiState.isRefreshingCache,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        if (uiState.isRefreshingCache) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.onPrimary
+                            )
+                        } else {
+                            Icon(Icons.Default.Refresh, contentDescription = null)
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(if (uiState.isRefreshingCache) "Syncing Bucket..." else "Save & Refresh Cache")
+                    }
 
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -699,15 +821,14 @@ fun PixooControllerScreen(
                             fontSize = 12.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                        TextButton(
-                            onClick = {
-                                viewModel.updateConfig {
-                                    it.copy(gcsBucketUrl = SlideshowConfig.DEFAULT_GCS_BUCKET)
-                                }
-                            }
-                        ) {
-                            Text("Reset Default", fontSize = 12.sp)
-                        }
+                        Text(
+                            text = uiState.config.gcsBucketUrl.removePrefix("gs://"),
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace,
+                            color = MaterialTheme.colorScheme.primary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
                     }
                 } else {
                     OutlinedTextField(

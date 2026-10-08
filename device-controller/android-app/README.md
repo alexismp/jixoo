@@ -27,8 +27,6 @@ Because the Pixoo 64 communicates over local unencrypted HTTP (`POST http://<pix
   - Phone screen preview rendering is disabled (`previewPixels64 = null`) so the Android device expends minimal CPU/GPU/battery.
   - For animated GIFs, a single animation cycle (up to `40` frames to fit safely inside the ESP32's `520 KB` internal SRAM) is burst-uploaded to the Pixoo's hardware buffer at full wire speed (`0ms` artificial inter-frame sleep). The Pixoo ESP32 then loops the animation autonomously using its native hardware timer for jitter-free framerate.
   - `Draw/ResetHttpGifId` is issued **only once at slideshow startup** (and before `uint16` overflow at `60000`) rather than between slides, avoiding unnecessary screen clears.
-- **24/7 Screen-Off & Unattended Execution (`SlideshowForegroundService`)**:
-  - Starts an Android `connectedDevice` Foreground Service holding both a CPU `PARTIAL_WAKE_LOCK` and a `WIFI_MODE_FULL_LOW_LATENCY` lock (`FLAG_KEEP_SCREEN_ON` when visible), preventing Android Doze timer coalescing (`TimerSlack`) and Wi-Fi 802.11 Power Save Mode (`PSM`) latency spikes even when the screen turns off or locks after hours of operation.
 - **Strict Hardware Backpressure & Secondary Device Circuit Breaker**:
   - Per-device `Mutex` serialization ensures a frame or command is never sent until the Pixoo confirms completion (`{"error_code": 0}`).
   - If a configured Secondary Pixoo goes offline, a **per-device circuit breaker** isolates it into a `15s` backoff window (`0ms` per-frame penalty) so an unreachable secondary screen never stalls or degrades the primary display.

@@ -308,7 +308,6 @@ class SlideshowViewModel(application: Application) : AndroidViewModel(applicatio
         slideshowJob?.cancel()
         slideshowJob = null
         skipSignal.complete(Unit)
-        io.github.glaforge.jixoo.controller.service.SlideshowForegroundService.stop(getApplication())
         appendLog("Slideshow stopped.")
         _uiState.update {
             it.copy(
@@ -320,7 +319,6 @@ class SlideshowViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun startSlideshow(activity: Activity?) {
         if (_uiState.value.isRunning) return
-        io.github.glaforge.jixoo.controller.service.SlideshowForegroundService.start(getApplication())
         slideshowJob = viewModelScope.launch(Dispatchers.Default) {
             _uiState.update {
                 it.copy(
@@ -336,7 +334,6 @@ class SlideshowViewModel(application: Application) : AndroidViewModel(applicatio
             } catch (e: Exception) {
                 appendLog("Error: ${e.message ?: "Unexpected failure"}")
             } finally {
-                io.github.glaforge.jixoo.controller.service.SlideshowForegroundService.stop(getApplication())
                 _uiState.update {
                     it.copy(
                         isRunning = false,
